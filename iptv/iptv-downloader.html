@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>IPTV M3U Downloader</title>
+<style>
+  body{font-family:monospace;background:#0a0a0f;color:#e8e8f0;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:2rem;}
+  .card{background:#111118;border:1px solid #1e1e2e;border-radius:12px;padding:2rem;width:100%;max-width:520px;}
+  h1{color:#00e5ff;margin-bottom:1.5rem;font-size:1.4rem;}
+  label{display:block;font-size:.75rem;color:#555570;margin-bottom:.3rem;text-transform:uppercase;}
+  input,select{width:100%;background:#0a0a0f;border:1px solid #1e1e2e;border-radius:6px;padding:.65rem .9rem;color:#e8e8f0;font-family:monospace;font-size:.85rem;outline:none;margin-bottom:1rem;}
+  input:focus,select:focus{border-color:#00e5ff;}
+  .row{display:grid;grid-template-columns:1fr 1fr;gap:1rem;}
+  button{width:100%;padding:.85rem;background:#00e5ff;color:#000;border:none;border-radius:6px;font-family:monospace;font-weight:700;font-size:.85rem;cursor:pointer;text-transform:uppercase;}
+  button:hover{background:#33eeff;}
+  button:disabled{background:#555570;cursor:not-allowed;}
+  #log{margin-top:1rem;background:#0a0a0f;border:1px solid #1e1e2e;border-radius:6px;padding:.8rem;font-size:.75rem;max-height:200px;overflow-y:auto;display:none;}
+  .ok{color:#00ff88;}.err{color:#ff4466;}.warn{color:#ffaa00;}.accent{color:#00e5ff;}
+  .stats{display:none;grid-template-columns:repeat(3,1fr);gap:.8rem;margin-top:1rem;}
+  .stat{background:#0a0a0f;border:1px solid #1e1e2e;border-radius:6px;padding:.6rem;text-align:center;}
+  .sv{font-size:1.3rem;font-weight:800;color:#00e5ff;}
+  .sl{font-size:.6rem;color:#555570;text-transform:uppercase;}
+  progress{width:100%;height:4px;margin-top:.8rem;display:none;accent-color:#00e5ff;}
+  .note{margin-top:1rem;font-size:.7rem;color:#00ff8877;border:1px solid rgba(0,255,136,.15);border-radius:6px;padding:.7rem;background:rgba(0,255,136,.03);}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>&#11015; IPTV M3U Downloader</h1>
+  <label>Server URL</label>
+  <input id="server" value="" />
+  <div class="row">
+    <div><label>Port</label><input id="port" value="80" /></div>
+    <div><label>Format</label>
+      <select id="format">
+        <option value="m3u_plus">M3U Plus</option>
+        <option value="m3u">M3U Simple</option>
+      </select>
+    </div>
+  </div>
+  <div class="row">
+    <div><label>Username</label><input id="user" autocomplete="off" /></div>
+    <div><label>Password</label><input id="pass" type="password" /></div>
+  </div>
+  <label>Content</label>
+  <select id="content">
+    <option value="all">Live + VOD + Series</option>
+    <option value="live">Live TV only</option>
+    <option value="vod">VOD only</option>
+    <option value="series">Series only</option>
+  </select>
+  <button id="btn" onclick="go()">Build &amp; Download M3U</button>
+  <progress id="prog" max="100" value="0"></progress>
+  <div class="stats" id="stats">
+    <div class="stat"><div class="sv" id="sl">0</div><div class="sl">Live</div></div>
+    <div class="stat"><div class="sv" id="sv">0</div><div class="sl">VOD</div></div>
+    <div class="stat"><div class="sv" id="ss">0</div><div class="sl">Series</div></div>
+  </div>
+  <div id="log"></div>
+  <div class="note">🔒 Runs 100% locally. Credentials go only to your IPTV server.</div>
+</div>
+<script>
+var lines=[],lc=0,vc=0,sc=0;
+function base(){
+  var s=document.getElementById('server').value.trim().replace(/\/$/,'').replace(/:\d+$/,'');
+  var p=document.getElementById('port').value.trim();
+  return p&&p!='80'?s+':'+p:s;
+}
+function lg(m,c){
+  var el=document.getElementById('log');el.style.display='block';
+  el.innerHTML+='<div class="'+(c||'')+'">['+new Date().toLocaleTimeString()+'] '+m+'</div>';
+  el.scrollTop=el.scrollHeight;
+}
+function pr(v){var p=document.getElementById('prog');p.style.display='block';p.value=v;}
+async function get(url){var r=await fetch(url);if(!r.ok)throw new Error('HTTP '+r.status);return r.json();}
+async function go(){
+  var user=document.getElementById('user').value.trim(),pass=document.getElementById('pass').value.trim();
+  var cnt=document.getElementById('content').value,fmt=document.getElementById('format').value,b=base();
+  if(!user||!pass){lg('Enter username and password','warn');return;}
+  document.getElementById('btn').disabled=true;
+  document.getElementById('log').innerHTML='';
+  document.getElementById('stats').style.display='none';
+  lines=[];lc=0;vc=0;sc=0;
+  lg('Connecting...','accent');pr(5);
+  var du=b+'/get.php?username='+encodeURIComponent(user)+'&password='+encodeURIComponent(pass)+'&type='+fmt+'&output=ts';
+  try{var r=await fetch(du),t=await r.text();
+    if(t.startsWith('#EXTM3U')||t.includes('#EXTINF')){lg('Direct download OK!','ok');pr(100);dl(t,'playlist.m3u');document.getElementById('btn').disabled=false;return;}
+    lg('Direct blocked, using API...','warn');
+  }catch(e){lg('Direct failed: '+e.message,'warn');}
+  try{
+    var inf=await get(b+'/player_api.php?username='+encodeURIComponent(user)+'&password='+encodeURIComponent(pass));
+    if(!inf.user_info||inf.user_info.auth!==1)throw new Error('Auth failed');
+    lg('Auth OK: '+inf.user_info.username+' ('+inf.user_info.status+')','ok');pr(15);
+    lines.push('#EXTM3U');
+    if(cnt=='all'||cnt=='live')await fLive(b,user,pass);
+    if(cnt=='all'||cnt=='vod')await fVod(b,user,pass);
+    if(cnt=='all'||cnt=='series')await fSeries(b,user,pass);
+    lg('Done! '+(lc+vc+sc)+' entries','ok');
+    document.getElementById('sl').textContent=lc;
+    document.getElementById('sv').textContent=vc;
+    document.getElementById('ss').textContent=sc;
+    document.getElementById('stats').style.display='grid';
+    pr(100);dl(lines.join('\n'),'playlist.m3u');
+  }catch(e){lg('Error: '+e.message,'err');}
+  document.getElementById('btn').disabled=false;
+}
+async function fLive(b,u,p){
+  lg('Fetching live channels...','');
+  var cats=await get(b+'/player_api.php?username='+encodeURIComponent(u)+'&password='+encodeURIComponent(p)+'&action=get_live_categories');
+  var cm={};if(Array.isArray(cats))cats.forEach(function(c){cm[c.category_id]=c.category_name;});
+  var st=await get(b+'/player_api.php?username='+encodeURIComponent(u)+'&password='+encodeURIComponent(p)+'&action=get_live_streams');
+  if(!Array.isArray(st)){lg('No live streams','warn');return;}
+  st.forEach(function(s){var cat=cm[s.category_id]||'Other',n=(s.name||'?').replace(/,/g,' ');
+    lines.push('#EXTINF:-1 tvg-id="'+(s.epg_channel_id||'')+'" tvg-name="'+n+'" tvg-logo="'+(s.stream_icon||'')+'" group-title="'+cat+'",'+n);
+    lines.push(b+'/live/'+encodeURIComponent(u)+'/'+encodeURIComponent(p)+'/'+s.stream_id+'.ts');lc++;});
+  lg('  '+lc+' live channels','ok');pr(40);
+}
+async function fVod(b,u,p){
+  lg('Fetching VOD...','');
+  var cats=await get(b+'/player_api.php?username='+encodeURIComponent(u)+'&password='+encodeURIComponent(p)+'&action=get_vod_categories');
+  var cm={};if(Array.isArray(cats))cats.forEach(function(c){cm[c.category_id]=c.category_name;});
+  var st=await get(b+'/player_api.php?username='+encodeURIComponent(u)+'&password='+encodeURIComponent(p)+'&action=get_vod_streams');
+  if(!Array.isArray(st)){lg('No VOD','warn');return;}
+  st.forEach(function(s){var cat=cm[s.category_id]||'VOD',n=(s.name||'?').replace(/,/g,' '),ext=s.container_extension||'mp4';
+    lines.push('#EXTINF:-1 tvg-name="'+n+'" tvg-logo="'+(s.stream_icon||'')+'" group-title="'+cat+'",'+n);
+    lines.push(b+'/movie/'+encodeURIComponent(u)+'/'+encodeURIComponent(p)+'/'+s.stream_id+'.'+ext);vc++;});
+  lg('  '+vc+' VOD movies','ok');pr(70);
+}
+async function fSeries(b,u,p){
+  lg('Fetching series...','');
+  var cats=await get(b+'/player_api.php?username='+encodeURIComponent(u)+'&password='+encodeURIComponent(p)+'&action=get_series_categories');
+  var cm={};if(Array.isArray(cats))cats.forEach(function(c){cm[c.category_id]=c.category_name;});
+  var list=await get(b+'/player_api.php?username='+encodeURIComponent(u)+'&password='+encodeURIComponent(p)+'&action=get_series');
+  if(!Array.isArray(list)){lg('No series','warn');return;}
+  var lim=Math.min(list.length,200);if(list.length>200)lg('Limiting to 200 series','warn');
+  for(var i=0;i<lim;i++){var s=list[i];
+    try{var inf=await get(b+'/player_api.php?username='+encodeURIComponent(u)+'&password='+encodeURIComponent(p)+'&action=get_series_info&series_id='+s.series_id);
+      var cat=cm[s.category_id]||'Series';
+      if(inf.episodes)Object.values(inf.episodes).flat().forEach(function(ep){
+        var en=s.name+' S'+String(ep.season).padStart(2,'0')+'E'+String(ep.episode_num).padStart(2,'0');
+        lines.push('#EXTINF:-1 tvg-name="'+en+'" tvg-logo="'+(s.cover||'')+'" group-title="'+cat+'",'+en);
+        lines.push(b+'/series/'+encodeURIComponent(u)+'/'+encodeURIComponent(p)+'/'+ep.id+'.'+(ep.container_extension||'mp4'));sc++;});
+    }catch(e){}
+    if(i%20===0)pr(70+Math.round(i/lim*25));
+  }
+  lg('  '+sc+' series episodes','ok');pr(95);
+}
+function dl(t,fn){
+  var a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([t],{type:'application/x-mpegurl'}));
+  a.download=fn;a.click();
+  lg('Downloaded: '+fn,'accent');
+}
+</script>
+</body>
+</html>
